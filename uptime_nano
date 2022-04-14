@@ -1,0 +1,88 @@
+#!/usr/bin/perl
+use strict;
+use Net::SSH2;
+
+my $debug = 0;
+my $ret = 0;
+my $timeout = 120;
+
+my $logFile = 'reboot_nano.log';
+my $tiempoActivo = 15;
+my $delay = 60;
+
+my $defaultPass = 'd3f4ultP455';
+
+#
+# Configuration file
+#
+# Variables are of type
+# key=value
+#
+# Expected keys are: username and password
+#
+
+my $conffile = '.reboot_nano';
+my %conf = ();
+
+exit(0) if (! -f $conffile);
+
+open (CONF, $conffile);
+while (<CONF>) {
+        chomp;
+        next if ($_ =~ /^#/);
+        next if ($_ =~ /^\s*$/);
+        my ($a, $v) = split/\s*=\s*/, $_;
+        print "Key: $a Value: $v\n" if ($debug);
+        $conf{$a} = $v;
+}
+close (CONF);
+
+die "No username" if ($conf{'username'} eq '');
+die "No password" if ($conf{'password'} eq '');
+
+my $username = $conf{'username'};
+my $password = $conf{'password'};
+
+my %aps = ();
+
+if ($#ARGV != 0) {
+        print <<END;
+Uso:
+
+        $0 <AP_ip_address>
+
+Ej:
+        $0 10.11.10.1
+
+
+END
+        exit(0);
+}
+
+local $SIG{ALRM} = sub { die "Timeout\n" };
+
+my $ip = $ARGV[0];
+
+alarm($timeout);
+
+my $out='';
+
+my $ssh2 = Net::SSH2->new();
+$ssh2->connect($ip) or die $!;
+
+my $val=$ssh2->auth_password($username, $password);
+
+if (! $val) {
+	$val=$ssh2->auth_password($username, $defaultPass);
+}
+
+if ($val) {
+	my $chan = $ssh2->channel();
+	$chan->blocking(0);
+	$chan->exec('uptime');
+	while (<$chan>){ print }
+} else {
+	print "Authentication error\n";
+}
+
+exit($ret);
