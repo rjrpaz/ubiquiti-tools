@@ -1,0 +1,116 @@
+#!/usr/bin/perl
+use strict;
+use Net::SSH2;
+
+# Instalación de firmware en el AP
+# El archivo con el firmware a instalar debe ser
+# /tmp/fwupdate.bin.
+# Ese archivo es subido al AP, y se lanza el proceso
+# de actualización
+
+my $debug = 0;
+my $ret = 0;
+my $timeout = 120;
+my $firmware = '/tmp/fwupdate.bin';
+
+my $tiempoActivo = 15;
+my $delay = 60;
+
+my $defaultPass = 'd3f4ultP455';
+
+#
+# Configuration file
+#
+# Variables are of type
+# key=value
+#
+# Expected keys are: username and password
+#
+
+my $conffile = '.reboot_nano';
+my %conf = ();
+
+exit(0) if (! -f $conffile);
+
+open (CONF, $conffile);
+while (<CONF>) {
+        chomp;
+        next if ($_ =~ /^#/);
+        next if ($_ =~ /^\s*$/);
+        my ($a, $v) = split/\s*=\s*/, $_;
+        print "Key: $a Value: $v\n" if ($debug);
+        $conf{$a} = $v;
+}
+close (CONF);
+
+die "No username" if ($conf{'username'} eq '');
+die "No password" if ($conf{'password'} eq '');
+
+my $username = $conf{'username'};
+my $password = $conf{'password'};
+
+my %aps = ();
+
+if ($#ARGV != 0) {
+        print <<END;
+Uso:
+
+        $0 <AP_id_address>
+
+Ej:
+        $0 10.11.10.1
+
+
+END
+        exit(0);
+}
+
+
+local $SIG{ALRM} = sub { die "Timeout\n" };
+
+my $ip = $ARGV[0];
+
+alarm($timeout);
+
+my $fileVersion = `strings $firmware | head -n 1`;
+chomp($fileVersion);
+my @a = split /\./, $fileVersion;
+$fileVersion = join('.', $a[2], $a[3], $a[4]);
+
+my $out='';
+
+my $ssh2 = Net::SSH2->new();
+$ssh2->connect($ip) or die $!;
+
+my $val=$ssh2->auth_password($username, $password);
+
+if (! $val) {
+	$val=$ssh2->auth_password($username, $defaultPass);
+}
+
+if ($val) {
+	my $chan = $ssh2->channel();
+	$chan->exec('cat /etc/version');
+	my $version = '';
+	$version = <$chan>;
+	chomp($version);
+
+	my $largo = length($fileVersion);
+	my $tail = substr($version, -$largo);
+	if ($fileVersion eq $tail) {
+		print "Provided version already present\n" if ($debug);
+		$ret=0;
+		goto RET;
+	} else {
+		print "Update from version $tail to $fileVersion\n" if ($debug);
+		$ssh2->scp_put($firmware, $firmware) or die "Error on scp_put\n";
+
+		my $command = "sshpass -p $password ssh -o StrictHostKeyChecking=no $username\@$ip 'ubntbox fwupdate.real -m $firmware'";
+		system($command);
+	}
+} else {
+	print "Authentication error\n";
+}
+
+RET:
+exit($ret);

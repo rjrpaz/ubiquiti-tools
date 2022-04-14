@@ -1,0 +1,121 @@
+#!/usr/bin/perl
+use strict;
+use Net::SSH::Perl;
+
+my $debug = 0;
+my $ret = 0;
+my $timeout = 120;
+
+my $logFile = 'reboot_nano.log';
+
+#
+# Configuration file
+#
+# Variables are of type
+# key=value
+#
+# Expected keys are: username and password
+#
+
+my $conffile = '.reboot_nano';
+my %conf = ();
+
+exit(0) if (! -f $conffile);
+
+open (CONF, $conffile);
+while (<CONF>) {
+        chomp;
+        next if ($_ =~ /^#/);
+        next if ($_ =~ /^\s*$/);
+        my ($a, $v) = split/\s*=\s*/, $_;
+        print "Key: $a Value: $v\n" if ($debug);
+        $conf{$a} = $v;
+}
+close (CONF);
+
+die "No username" if ($conf{'username'} eq '');
+die "No password" if ($conf{'password'} eq '');
+
+my $username = $conf{'username'};
+my $password = $conf{'password'};
+
+my $cmd = 'sed -i "s/wireless.1.l2_isolation=enabled/wireless.1.l2_isolation=disabled/g" /tmp/system.cfg';
+
+my %aps = ();
+
+if ($#ARGV != 0) {
+        print <<END;
+Uso:
+
+        $0 <direccion_ip_AP>
+
+Ej:
+        $0 10.11.10.1
+
+
+END
+        exit(0);
+}
+
+local $SIG{ALRM} = sub { die "Timeout\n" };
+alarm($timeout);
+
+my $ip = $ARGV[0];
+
+my $ssh = Net::SSH::Perl->new($ip, privileged => 0, options => [ "BatchMode yes"], strict_host_key_checking => 'no');
+
+$ssh->login($username, $password) or die "Can't connect $ip";
+
+my ($out, $err, $exit) = $ssh->cmd($cmd);
+
+if ($exit != 0) {
+	logmsg("Not able to change line $ip");
+	exit(-1);
+}
+sleep(2);
+
+($out, $err, $exit) = $ssh->cmd('cfgmtd -w -p /etc/');
+if ($exit != 0) {
+	logmsg("Can't save $ip");
+	exit(-2);
+}
+sleep(2);
+
+eval {
+        ($out, $err, $exit) = $ssh->cmd('reboot -f');
+};
+
+
+if ($@) {
+        # Timeout: connectivity lost after forcing the reboot
+        if ($@ =~ m/Timeout/i) {
+                rebootOk($ip);
+                $ret = 0;
+        # Device reset connection due to reboot
+        } elsif ($@ =~ m/Connection reset by peer/i) {
+                rebootOk($ip);
+                $ret = 0;
+        } else {
+                logmsg("Error trying to reboot AP $ip. Errorcode $exit. $out, $err");
+                $ret = -1;
+        }
+}
+
+exit($ret);
+
+
+sub logmsg
+{
+	open (LOG, ">> $logFile");
+	print LOG scalar localtime, ": @_ \n";
+	print ": @_ \n";
+	close (LOG);
+}
+
+sub rebootOk
+{
+        my $ip = $_[0];
+        logmsg("AP $ip reboot sucessful");
+        return;
+} 
+
